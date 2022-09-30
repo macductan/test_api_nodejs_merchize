@@ -4,7 +4,7 @@ const database = require('../configs/database');
 const findOne = async (collection, where, getCol = null) => {
     mongoose.connect(database.url, { useNewUrlParser: true });
     let db = mongoose.model(collection, database.returnSchema(collection));
-    let docs = await db.findOne(where, getCol);
+    let docs = await db.findOne(where).select(getCol);
     if (docs) docs = docs.toObject();
     return docs;
 }

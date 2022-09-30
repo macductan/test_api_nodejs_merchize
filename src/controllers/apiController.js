@@ -3,7 +3,13 @@ require('dotenv').config();
 const coreModel = require('../model/coreModel');
 const jwt = require('jsonwebtoken');
 
-const selectUser = ['email', 'username', 'bio', 'image'];
+const selectUser = {
+    "email": 1,
+    "username": 1,
+    "bio": 1,
+    "image": 1,
+    _id: 0,
+};
 const current_date = new Date(Date.now() + 7 * 60 * 60 * 1000);
 
 const somethingWrong = {
@@ -36,12 +42,12 @@ const duplicateEntryPrimary = (obj = null) => {
 }
 
 const checkRequest = (check, res, dataReturn = null) => {
-    if (check) {
-        return res.status(200).json([dataReturn]);
-    }
-    else {
-        return res.status(403).json(somethingWrong);
-    }
+    // if (check) {
+    return res.status(200).json(dataReturn);
+    // }
+    // else {
+    //     return res.status(403).json(somethingWrong);
+    // }
 }
 
 const authentication = async (req, res) => {
@@ -49,11 +55,12 @@ const authentication = async (req, res) => {
         let user = req.body['user'];
         let data = await coreModel.findOne('users', user, selectUser);
         if (!data) return res.status(403).json(notice("Could't found this account"));
+        data['token'] = jwt.sign(JSON.stringify(data), process.env.ACCESS_TOKEN_SECRET);
         return res.status(200).json({
-            data,
-            token: jwt.sign(JSON.stringify(data), process.env.ACCESS_TOKEN_SECRET)
+            'user': data,
         })
     } catch (error) {
+        console.log(error)
         return res.status(403).json(somethingWrong)
     }
 }
@@ -62,14 +69,10 @@ const registration = async (req, res) => {
     try {
         let user = req.body['user'];
         let where = { $or: [{ username: user['username'] }, { email: user['email'] }] };
-        let data = await coreModel.findOne('users', where);
-        if (data != null)
-            return res.status(403).json(duplicateEntryPrimary(['username', 'email']))
-
-        console.log(user);
         await coreModel.insert('users', user);
-        delete user['password']
-        return res.status(200).json(user)
+        let data = await coreModel.findOne('users', where, selectUser);
+        data['token'] = '';
+        return res.status(200).json({ 'user': data })
     } catch (error) {
         console.log(error)
         return res.status(403).json(somethingWrong)
@@ -79,23 +82,34 @@ const registration = async (req, res) => {
 const getCurrentUser = async (req, res) => {
     let data = await coreModel.findOne('users', { username: req.user.username }, selectUser);
     if (!data) return res.status(403).json(notice("Could't found this account"));
+    data['token'] = jwt.sign(JSON.stringify(data), process.env.ACCESS_TOKEN_SECRET)
     return res.status(200).json(
         {
-            data,
-            token: jwt.sign(JSON.stringify(data), process.env.ACCESS_TOKEN_SECRET)
+            'user': data,
         }
     )
 }
 
 const updateUser = async (req, res) => {
     try {
+        let user_login = req.user.username;
         let user = req.body["user"];
-        let where = { email: req.user.email };
+        if (typeof user['username'] === 'undefined')
+            user['username'] = user_login
+
+        let data = await coreModel.findOne('users', { 'username': user_login }, selectUser);
+        Object.keys(user).forEach(e => {
+            try {
+                data[e] = user[e];
+            } catch (error) {
+
+            }
+        })
+
+        let where = { username: user_login };
         let checkUpdate = await coreModel.update("users", where, user);
-        checkRequest(checkUpdate, res, [
-            { token: jwt.sign(JSON.stringify(user), process.env.ACCESS_TOKEN_SECRET) },
-            { user }
-        ])
+        data['token'] = jwt.sign(JSON.stringify(data), process.env.ACCESS_TOKEN_SECRET)
+        checkRequest(checkUpdate, res, { user: data })
     } catch (error) {
         console.log(error)
         return res.status(403).json(somethingWrong);
@@ -179,24 +193,35 @@ const listArticles = async (req, res) => {
         if (typeof query.tag !== 'undefined') {
             where.tagList = query.tag;
         }
+        if (typeof query.favorited !== 'undefined') {
+            where['favorited'] = {};
+            where['favorited'][query.favorited] = true;
+        }
         if (typeof query.limit !== 'undefined') {
             limit = parseInt(query.limit);
         }
         if (typeof query.author !== 'undefined') {
             offset = parseInt(query.offset);
         }
+        console.log(where);
         let sort = { 'favoritesCount': -1 };
         let data = await coreModel.getListArticles(where, { limit, offset, sort });
 
-        data.forEach(e => {
-            if (typeof e['author_info']['following'][query.author] === 'undefined')
-                e['author_info']['following'] = false;
-            else['author_info']['following'] = true;
-
+        let data_res = { "articles": [] }
+        await data.forEach(e => {
+            try {
+                if (typeof e['author_info']['following'][query.author] === 'undefined')
+                    e['author_info']['following'] = false;
+                else e['author_info']['following'] = true;
+            } catch (error) {
+                e['author_info']['following'] = false
+            }
             delete e['author_info']['password'];
+            if (e.tagList[0] == query.tag) data_res.articles.push(e);
         })
 
-        return res.status(200).json(data);
+        data_res['articlesCount'] = Object.keys(data_res['articles']).length;
+        return res.status(200).json(data_res);
     } catch (error) {
         console.log(error);
         return res.status(403).json(somethingWrong);
@@ -206,10 +231,18 @@ const listArticles = async (req, res) => {
 const feedArticles = async (req, res) => {
     try {
         let get_user = await coreModel.findOne('users', { username: req.user.username });
-        let following_array = get_user['following'];
-        let get_followed = Object.keys(following_array);
-        let list_articles = await coreModel.getListArticles({ 'author': { $in: get_followed } });
-        return res.status(200).json(list_articles);
+        let following_array, get_followed, where = {};
+        try {
+            following_array = get_user['following'];
+            get_followed = Object.keys(following_array);
+            where[author] = { $in: get_followed }
+        } catch (error) {
+            following_array = [];
+        }
+        let list_articles = await coreModel.getListArticles(where);
+        let data_res = { "articles": list_articles }
+        data_res['articlesCount'] = Object.keys(data_res['articles']).length;
+        return res.status(200).json(data_res);
     } catch (error) {
         console.log(error);
         return res.status(403).json(somethingWrong);
@@ -224,7 +257,7 @@ const getArticles = async (req, res) => {
         } catch (error) {
 
         }
-        return res.status(200).json(data);
+        return res.status(200).json({ 'article': data[0] });
     } catch (error) {
         return res.status(403).json(somethingWrong);
     }
@@ -238,13 +271,15 @@ const createArticles = async (req, res) => {
 
         // Get current date
         articles['createdAt'] = current_date;
+        articles['updatedAt'] = current_date;
 
-        let data = await coreModel.findOne('articles', { 'slug': articles['slug'] });
-        if (data) {
-            return res.status(403).json(duplicateEntryPrimary(['slug']))
-        }
+        // let data = await coreModel.findOne('articles', { 'slug': articles['slug'] });
+        // if (data) {
+        //     return res.status(403).json(duplicateEntryPrimary(['slug']))
+        // }
         await coreModel.insert('articles', articles);
-        return res.status(200).json(articles)
+        let data = await coreModel.getListArticles({ slug: articles['slug'] });
+        return res.status(200).json({ 'article': data[0] })
     } catch (error) {
         console.log(error);
         return res.status(403).json(somethingWrong);
@@ -260,16 +295,20 @@ const updateArticles = async (req, res) => {
         }
 
         let article = req.body['article'];
-        if (typeof article.title !== undefined) {
+        if (typeof article.title !== 'undefined') {
             article['slug'] = article.title.replaceAll(' ', '-');
             let check_slug = await coreModel.findOne('articles', { 'slug': article['slug'] });
             if (check_slug) return res.status(403).json(notice('Slug is exist'));
+        }
+        else {
+            article['slug'] = slug.slug
         }
 
         article['updatedAt'] = current_date;
 
         let checkUpdate = await coreModel.update('articles', slug, article);
-        checkRequest(checkUpdate, res, article);
+        let data = await coreModel.getListArticles({ 'slug': article['slug'] });
+        checkRequest(checkUpdate, res, { 'article': data[0] });
     } catch (error) {
         console.log(error);
         return res.status(403).json(somethingWrong);
@@ -311,16 +350,6 @@ const addComment = async (req, res) => {
 }
 
 const getComment = async (req, res) => {
-    // Get token
-    // let decoded;
-    // try {
-    //     const author = req.header('Authorization');
-    //     let token = author && author.split(' ')[1];
-    //     decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
-    // } catch (error) {
-
-    // }
-
     try {
         return res.status(200).json(await coreModel.findAll('comments', { 'slug': req.path.split('/')[2] }));
     } catch (error) {
@@ -349,15 +378,21 @@ const favoriteArticle = async (req, res) => {
         let slug = req.params;
         let user_login = req.user.username
         let check_articles = await coreModel.findOne('articles', slug);
+
         if (!check_articles) {
             return res.status(403).json(notice('Non exist article'));
         }
+
         if (!check_articles['favorited']) check_articles['favorited'] = {};
         if (typeof check_articles['favorited'][user_login] === 'undefined') {
             check_articles['favorited'][user_login] = true;
         }
+
         let check_update = await coreModel.update('articles', slug, { 'favorited': check_articles['favorited'] });
-        checkRequest(check_update, res, check_update);
+        let data_res = await coreModel.getListArticles(slug);
+        data_res = data_res[0];
+        data_res['favorited'] = true
+        checkRequest(check_update, res, { 'article': data_res });
     } catch (error) {
         return res.status(403).json(somethingWrong);
     }

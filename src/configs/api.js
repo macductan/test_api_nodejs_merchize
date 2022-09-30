@@ -7,8 +7,8 @@ const route = express.Router();
 const initRoute = app => {
     route.post('/users/login', apiController.authentication);
     route.post('/users', apiController.registration);
-    route.get('/users', midderWare.verifyToken, apiController.getCurrentUser);
-    route.put('/users', midderWare.verifyToken, apiController.updateUser);
+    route.get('/user', midderWare.verifyToken, apiController.getCurrentUser);
+    route.put('/user', midderWare.verifyToken, apiController.updateUser);
     route.get('/articles', apiController.listArticles);
     route.get('/articles/feed', midderWare.verifyToken, apiController.feedArticles);
     route.post('/articles', midderWare.verifyToken, apiController.createArticles);
