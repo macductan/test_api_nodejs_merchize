@@ -62,7 +62,7 @@ const deleteOne = async (collection, where) => {
     mongoose.connect(database.url, { useNewUrlParser: true });
     let db = mongoose.model(collection, database.returnSchema(collection));
     let res = null;
-    await db.deleteMany(where).then(data => {
+    await db.deleteOne(where).then(data => {
         if (data.deletedCount)
             res = data;
     });
@@ -104,6 +104,52 @@ const getListArticles = async (where, format = { limit: null, offset: null, sort
     return data;
 }
 
+const getComments = async (where, format = { limit: null, offset: null, sort: null }) => {
+    mongoose.connect(database.url, { useNewUrlParser: true });
+    let db = mongoose.model('comments', database.returnSchema('comments'));
+    let pipeline = [{
+        $lookup: {
+            from: 'articles',
+            localField: 'slug',
+            foreignField: 'slug',
+            as: 'article'
+        }
+    }, {
+        $unwind: {
+            path: '$article'
+        }
+    }, {
+        $lookup: {
+            from: 'users',
+            localField: 'article.author',
+            foreignField: 'username',
+            as: 'author'
+        }
+    }, {
+        $unwind: {
+            path: '$author'
+        }
+    }, {
+        $project: {
+            author: {
+                password: 0,
+                following: 0
+            }
+        }
+    }, {
+        $match: where
+    }];
+    console.log(pipeline);
+
+    if (format.sort) pipeline.push({ $sort: format.sort });
+    if (format.offset) pipeline.push({ $skip: format.offset });
+    if (format.limit) pipeline.push({ $limit: format.limit });
+
+    let data = await db.aggregate(pipeline)
+    // let data = await db.find(where);
+    return data;
+}
+
 const getTags = async () => {
     mongoose.connect(database.url, { useNewUrlParser: true });
     let db = mongoose.model('article', database.returnSchema('articles'));
@@ -115,5 +161,5 @@ const getTags = async () => {
 }
 
 module.exports = {
-    findOne, findAll, insert, update, deleteOne, getListArticles, getIDComment, getTags
+    findOne, findAll, insert, update, deleteOne, getListArticles, getIDComment, getTags, getComments
 }

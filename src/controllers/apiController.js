@@ -70,9 +70,10 @@ const registration = async (req, res) => {
         let user = req.body['user'];
         let where = { $or: [{ username: user['username'] }, { email: user['email'] }] };
         await coreModel.insert('users', user);
-        let data = await coreModel.findOne('users', where, selectUser);
-        data['token'] = '';
-        return res.status(200).json({ 'user': data })
+        user['token'] = '';
+        user['bio'] = '';
+        user['image'] = '';
+        return res.status(200).json({ user })
     } catch (error) {
         console.log(error)
         return res.status(403).json(somethingWrong)
@@ -120,7 +121,7 @@ const updateUser = async (req, res) => {
 const getProfile = async (req, res) => {
     try {
         let user = req.params;
-        let data_user = await coreModel.findOne('users', user, ['username', 'bio', 'image']);
+        let data_user = await coreModel.findOne('users', user, selectUser);
         data_user['following'] = false;
 
         // Get token
@@ -135,10 +136,12 @@ const getProfile = async (req, res) => {
 
         if (typeof decoded !== 'undefined') {
             let user_login = await coreModel.findOne('users', { 'username': decoded.username });
+            if(!user_login['following']) user_login['following'] = {};
             if (typeof user_login['following'][user.username] !== 'undefined')
                 data_user['following'] = true;
+            else data_user['following'] = false;
         }
-        return res.status(200).json(data_user);
+        return res.status(200).json({'profile': data_user});
     } catch (error) {
         console.log(error)
         return res.status(403).json(somethingWrong);
@@ -153,13 +156,11 @@ const followUser = async (req, res) => {
         if (!get_user) return res.status(403).json(somethingWrong);
         let following = get_user.following;
         if (!following) following = {};
-        if (typeof following[username_url] !== 'undefined') {
-            return res.status(403).json(notice('You have been follow user ' + username_url));
-        }
         following[username_url] = true;
 
         let checkUpdate = await coreModel.update('users', { 'username': req.user.username }, { 'following': following });
-        checkRequest(checkUpdate, res, checkUpdate);
+        get_user['following'] = true
+        checkRequest(checkUpdate, res, {'profile': get_user});
     } catch (error) {
         console.log(error)
         return res.status(403).json(somethingWrong);
@@ -170,14 +171,18 @@ const unfollowUser = async (req, res) => {
     try {
         let user_url = req.path.split('/')[2];
         let user_login = req.user;
-        let get_follow_user = await coreModel.findOne('users', { 'username': user_login.username }, ['following']);
+        let get_follow_user = await coreModel.findOne('users', { 'username': user_login.username });
         try {
             delete get_follow_user['following'][user_url];
         } catch (error) {
 
         }
-        let checkUpdate = await coreModel.update('users', { 'username': user_login.username }, { 'following': get_follow_user.following });
-        checkRequest(checkUpdate, res, checkUpdate);
+
+        let where = { 'username': user_login.username };
+        let value = { 'following': get_follow_user.following };
+        let checkUpdate = await coreModel.update('users', where, value);
+        get_follow_user['following'] = false;
+        checkRequest(checkUpdate, res, {'profile': get_follow_user});
     } catch (error) {
         console.log(error)
         return res.status(403).json(somethingWrong);
@@ -208,16 +213,20 @@ const listArticles = async (req, res) => {
         let data = await coreModel.getListArticles(where, { limit, offset, sort });
 
         let data_res = { "articles": [] }
-        await data.forEach(e => {
-            try {
-                if (typeof e['author_info']['following'][query.author] === 'undefined')
-                    e['author_info']['following'] = false;
-                else e['author_info']['following'] = true;
-            } catch (error) {
-                e['author_info']['following'] = false
-            }
+        data.forEach(e => {
             delete e['author_info']['password'];
-            if (e.tagList[0] == query.tag) data_res.articles.push(e);
+            console.log(query.tag);
+            console.log(e.tagList[0]);
+
+            if (e.tagList[0] == query.tag || typeof query.tag === 'undefined')
+                data_res.articles.push(e);
+            try {
+                if (typeof data_res['articles']['author_info']['following'][query.author] === 'undefined')
+                    data_res['articles']['following'] = false;
+                else
+                    data_res['articles']['following'] = true;
+            } catch (error) {
+            }
         })
 
         data_res['articlesCount'] = Object.keys(data_res['articles']).length;
@@ -341,9 +350,13 @@ const addComment = async (req, res) => {
         let comment = req.body.comment;
         comment['id'] = parseInt(await coreModel.getIDComment('comments')) + 1;
         comment['createdAt'] = current_date;
+        comment['updatedAt'] = current_date;
         comment['slug'] = req.path.split('/')[2];
         await coreModel.insert('comments', comment);
-        return res.status(200).json(comment)
+        let article = await coreModel.findOne('articles', {'slug': comment['slug']});
+        let author = await coreModel.findOne('users', {'username': article.author}, selectUser);
+        comment['author'] = author;
+        return res.status(200).json({'comment': comment})
     } catch (error) {
         return res.status(403).json(somethingWrong);
     }
@@ -351,7 +364,10 @@ const addComment = async (req, res) => {
 
 const getComment = async (req, res) => {
     try {
-        return res.status(200).json(await coreModel.findAll('comments', { 'slug': req.path.split('/')[2] }));
+        let slug = req.path.split('/')[2];
+        console.log({slug});
+        let comments = await coreModel.getComments({slug});
+        return res.status(200).json({comments});
     } catch (error) {
         return res.status(403).json(somethingWrong);
     }
@@ -402,7 +418,9 @@ const deleteFavorite = async (req, res) => {
     try {
         let slug = req.params;
         let user_login = req.user.username
-        let check_articles = await coreModel.findOne('articles', slug);
+        let check_articles = await coreModel.getListArticles(slug);
+        check_articles = check_articles[0];
+        console.log(check_articles);
         if (!check_articles) {
             return res.status(403).json(notice('Non exist article'));
         }
@@ -413,7 +431,8 @@ const deleteFavorite = async (req, res) => {
 
         }
         let check_update = await coreModel.update('articles', slug, { 'favorited': check_articles['favorited'] });
-        checkRequest(check_update, res, check_update);
+        check_articles['favorited'] = false;
+        checkRequest(check_update, res, {'article': check_articles});
     } catch (error) {
         return res.status(403).json(somethingWrong);
     }
@@ -427,7 +446,7 @@ const getTags = async (req, res) => {
         tags.forEach(e => {
             data_return = Array.from(new Set(data_return.concat(e)));
         })
-        return res.status(200).json(data_return);
+        return res.status(200).json({'tags': data_return});
     } catch (error) {
         console.log(error);
         return res.status(403).json(somethingWrong);

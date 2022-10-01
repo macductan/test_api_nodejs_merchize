@@ -31,8 +31,8 @@ let articles = new mongoose.Schema({
 let comments = new mongoose.Schema({
     id: Number,
     createdAt: { type: Date, default: null },
-    updateAt: { type: Date, default: null },
-    blog: String,
+    updatedAt: { type: Date, default: null },
+    body: String,
     slug: { type: String, ref: 'articles' },
 })
 
